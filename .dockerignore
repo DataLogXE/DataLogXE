@@ -1,0 +1,14 @@
+.git
+**/.vs
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/*.user
+**/*.log
+DataLogApi/data
+LICENSE
+*.md
+.env
+.env.*
+!.env.example

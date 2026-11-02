@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+  </Folder>
+  <Project Path="DataLogApi/DataLogApi.csproj" />
+  <Project Path="DataLogLib.Tests/DataLogLib.Tests.csproj" />
+  <Project Path="DataLogLib/DataLogLib.csproj" />
+  <Project Path="DataLogService/DataLogService.csproj" />
+  <Project Path="S7CommPlus/S7CommPlus.csproj" />
+</Solution>

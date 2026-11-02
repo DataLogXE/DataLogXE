@@ -1,0 +1,39 @@
+# DataLogXE proxy: HTTPS (Caddy internal CA) in front of the API. The sign-in is done by DataLogApi.
+# The proxy service (official Caddy image) fetches this file from GET /api/caddyfile at its start.
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+	# Certificates of the internal CA for whatever name or address the browser uses
+	on_demand_tls {
+		ask http://127.0.0.1:9999/ok
+	}
+	# http:// on the HTTPS port gets a redirect to https:// instead of "Client sent an HTTP request to an HTTPS server"
+	servers :8443 {
+		listener_wrappers {
+			http_redirect
+			tls
+		}
+	}
+}
+
+http://127.0.0.1:9999 {
+	respond /ok 200
+}
+
+https://:8443 {
+	tls internal {
+		on_demand
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+	reverse_proxy datalogxe:8080 {
+		# The job long polls of the UI go through at once
+		flush_interval -1
+	}
+}

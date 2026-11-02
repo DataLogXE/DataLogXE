@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DATA_PATH": "./data",
+        "DATABASE_URL": "Host=localhost;Port=5432;Database=datalogxe;Username=datalogxe;Password=datalogxe-dev-password;Maximum Pool Size=14",
+        "OPCUA_CERT_PATH": "./opcua"
+      }
+    }
+  }
+}

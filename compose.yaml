@@ -1,0 +1,65 @@
+# DataLogXE for PC or Raspberry Pi (64-bit, 1 GB RAM or more). Set up .env, then: docker compose up -d
+# UI: https://<host>:8443 (HTTPS_PORT); the first visit creates the administrator.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging: {options: {max-size: "10m", max-file: "3"}}
+
+services:
+  # PostgreSQL with TimescaleDB: configuration and archive. Sized for a Pi (PG_SHARED_BUFFERS for more);
+  # the 3 minutes of stop_grace_period let it shut down cleanly.
+  timescaledb:
+    <<: *defaults
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_USER: datalogxe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_INITDB_ARGS: --locale=C --encoding=UTF8
+      NO_TS_TUNE: "true"
+    command: >-
+      postgres -c shared_buffers=${PG_SHARED_BUFFERS:-128MB} -c max_connections=40 -c max_locks_per_transaction=256
+      -c max_worker_processes=8 -c max_parallel_workers=0 -c timescaledb.max_background_workers=4
+      -c timescaledb.telemetry_level=off -c checkpoint_timeout=15min -c max_wal_size=1GB -c wal_compression=lz4
+    stop_grace_period: 3m
+    volumes: [timescale-data:/var/lib/postgresql/data]
+    healthcheck: {test: pg_isready -U datalogxe, interval: 5s, retries: 20}
+
+  # The app: API, data sources and web UI in one process. init runs as PID 1, so the app gets the stop signal;
+  # the app starts once the database is healthy.
+  datalogxe:
+    <<: *defaults
+    image: datalogxe/datalogxe:0.0.253
+    init: true
+    environment: {POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?}", DATALOG_MASTER_KEY: "${DATALOG_MASTER_KEY:-}"}
+    volumes: [app-data:/app/data]
+    depends_on: {timescaledb: {condition: service_healthy}}
+
+  # HTTPS, the only published port. Caddy fetches its Caddyfile from the app; the label (the app version)
+  # makes each deploy recreate the proxy, so it fetches the Caddyfile of the new version.
+  proxy:
+    <<: *defaults
+    image: caddy:2.10.2-alpine
+    labels: [datalogxe.version=0.0.253]
+    command: >-
+      sh -c 'until wget -q -O /tmp/Caddyfile http://datalogxe:8080/api/caddyfile; do sleep 2; done;
+      exec caddy run --config /tmp/Caddyfile --adapter caddyfile'
+    ports: ["${HTTPS_PORT:-8443}:8443"]
+    volumes: [caddy-data:/data]
+    depends_on: [datalogxe]
+
+  # Host metrics for the System data source
+  telegraf:
+    <<: *defaults
+    image: telegraf:1.36
+    command: telegraf --config http://datalogxe:8080/api/telegraf.conf --config-url-retry-attempts -1
+    environment:
+      HOST_ETC: /hostfs/etc
+      HOST_PROC: /hostfs/proc
+      HOST_SYS: /hostfs/sys
+      HOST_VAR: /hostfs/var
+      HOST_RUN: /hostfs/run
+      HOST_MOUNT_PREFIX: /hostfs
+    volumes: ["/:/hostfs:ro"]
+    depends_on: [datalogxe]
+
+volumes: {timescale-data: {}, app-data: {}, caddy-data: {}}
