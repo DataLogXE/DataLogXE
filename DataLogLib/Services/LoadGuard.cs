@@ -47,7 +47,7 @@ namespace DataLogLib.Services
     /// 2026-10-31 six cursor reads blocked a Raspberry Pi for 22 minutes (load 31, 1 GB swap) and ~114 000 values were
     /// lost; the guard would have been critical about a minute after the start. Every 5 s it reads the load per core
     /// (it counts the waits for the SD card and the swap), the available memory, the pages read from swap, the share
-    /// of the insert buffer in use (a journal that holds values counts as full) and the longest wait for a connection
+    /// of the insert buffer in use (the values in the journal count as well) and the longest wait for a connection
     /// of a pool. Tense: background work (compression repair, counter backfills, imports) pauses and large queries
     /// wait. Critical: medium queries wait as well, and while it lasts the query jobs stop their oldest medium or
     /// large query (see QueryJobService). A level is entered after two samples in a row reach it, so a short peak of a
@@ -135,7 +135,7 @@ namespace DataLogLib.Services
             }
         }
 
-        /// <summary>Starts reading every 5 s; backlog tells the share of the insert buffer in use (0..1).</summary>
+        /// <summary>Starts reading every 5 s; backlog tells the values waiting in the buffer and the journal as a share of the buffer (0..1).</summary>
         public void Start(Func<double> insertBacklog)
         {
             lock (_lock)

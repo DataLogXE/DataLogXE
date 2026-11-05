@@ -129,6 +129,65 @@ namespace DataLogLib.Tests
         }
 
         [Fact]
+        public void The_journal_empties_under_a_steady_flow_and_keeps_the_order()
+        {
+            var archive = new FakeArchive { FailInserts = true };
+            var worker = new ArchiveInsertWorker();
+            worker.Init(archive, new ArchiveJournal(_folder, 1L << 30));
+            List<double> handed = [];
+            worker.OnArchiveInsert += (_, values) =>
+            {
+                lock (handed)
+                {
+                    handed.AddRange(values.Select(v => v.Value));
+                }
+            };
+
+            const int Initial = ArchiveInsertWorker.BUFFER_MAX_SIZE + 25_000;
+            for (var start = 0; start < Initial; start += 1000)
+            {
+                worker.InsertValues(Values(start, 1000));
+            }
+            Assert.Equal(25_000, worker.JournalCount);
+            Assert.Equal(1.0, worker.Backlog);
+
+            // Values arrive during every write, as from a PLC while the database is slow: the journal is never empty
+            // at the moment a value comes, still it must be left
+            var next = Initial;
+            var feeding = true;
+            archive.OnInsert = () =>
+            {
+                if (Volatile.Read(ref feeding))
+                {
+                    worker.InsertValues(Values(next, 100));
+                    next += 100;
+                }
+            };
+            archive.FailInserts = false;
+            WaitUntil(() => worker.JournalCount == 0 && Count(handed) > Initial);
+            Assert.Empty(Directory.GetFiles(_folder));
+            Volatile.Write(ref feeding, false);
+
+            // Still fed while the buffer drains: the values go to the buffer, not to the journal
+            Assert.Equal(0, worker.JournalCount);
+            WaitUntil(() => Count(handed) == Volatile.Read(ref next));
+            Assert.Equal(Enumerable.Range(0, next).Select(i => (double)i), handed);
+            Assert.Equal(0, worker.Backlog);
+        }
+
+        [Fact]
+        public void The_backlog_counts_the_values_of_the_journal()
+        {
+            var journal = new ArchiveJournal(_folder, 1L << 30);
+            journal.Append(Values(0, 500));
+            var worker = new ArchiveInsertWorker();
+            // Not replayed yet: the values stay in the journal
+            worker.Init(new FakeArchive(), journal);
+
+            Assert.Equal(500.0 / ArchiveInsertWorker.BUFFER_MAX_SIZE, worker.Backlog, 6);
+        }
+
+        [Fact]
         public void The_journal_of_the_last_run_is_written_once_the_archive_resolves_the_tags()
         {
             var journal = new ArchiveJournal(_folder, 1L << 30);

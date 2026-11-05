@@ -28,7 +28,9 @@ namespace DataLogLib.Services.ArchiveAccess
     /// This class collects the archive values in a list and inserts them into the
     /// archive in a separate thread. Values of a failed write are written with the next try.
     /// When the list is full, the values go to the journal on disk (see ArchiveJournal) instead of being dropped,
-    /// and new values follow them there until the journal is written, so the values reach the archive in order.
+    /// and new values follow them there, so the values reach the archive in order. Once the journal holds no more
+    /// than one chunk, its rest is handed back to the list (see HandBackJournalRest): under a steady flow of values
+    /// the journal would otherwise never be found empty, and every value would go over the disk.
     /// </summary>
     public class ArchiveInsertWorker
     {
@@ -37,13 +39,15 @@ namespace DataLogLib.Services.ArchiveAccess
         #endregion
 
         #region public const
-        public const int BUFFER_MAX_SIZE = 50000;
-        public const int BUFFER_WARN_SIZE = 20000;
+        public const int BUFFER_MAX_SIZE = 250000;
+        public const int BUFFER_WARN_SIZE = 100000;
         public const int MAX_ARCHIVE_CHUNK_SIZE = 10000;
         #endregion
 
         #region private fields
         private const int CATCHUP_SLEEP_MS = 100;
+        // The high level warning of the buffer at most this often
+        private const double WARN_LOG_INTERVAL_S = 10.0;
         private const int IDLE_SLEEP_MS = 1000;
         // Wait after a failed write, the archive is down or restarting
         private const int RETRY_SLEEP_MS = 5000;
@@ -56,6 +60,7 @@ namespace DataLogLib.Services.ArchiveAccess
         private volatile bool _replay = true;
         private bool _journaling;
         private DateTime _lastJournalLogUtc = DateTime.MinValue;
+        private DateTime _lastWarnLogUtc = DateTime.MinValue;
         private readonly List<ArchiveValue> _insertBuffer = [];
         // Serializes the worker and Flush so chunks reach the archive in order and only once.
         private readonly object _writeGate = new();
@@ -85,20 +90,20 @@ namespace DataLogLib.Services.ArchiveAccess
         /// <summary>The values in the journal on disk that have not reached the archive.</summary>
         internal long JournalCount => _journal?.Count ?? 0;
 
-        /// <summary>The share of the insert buffer in use (0..1) for the load guard; 1 while the journal holds values.</summary>
+        /// <summary>
+        /// The values waiting for the archive, in the buffer and in the journal, as a share of the buffer size (0..1)
+        /// for the load guard. A few values in the journal are no backlog; a journal larger than the buffer is full.
+        /// </summary>
         internal double Backlog
         {
             get
             {
-                if (_journal != null && !_journal.IsEmpty)
-                {
-                    return 1;
-                }
-
+                long waiting = _journal?.Count ?? 0;
                 lock (_insertBuffer)
                 {
-                    return (double)_insertBuffer.Count / BUFFER_MAX_SIZE;
+                    waiting += _insertBuffer.Count;
                 }
+                return Math.Min(1.0, (double)waiting / BUFFER_MAX_SIZE);
             }
         }
 
@@ -262,7 +267,12 @@ namespace DataLogLib.Services.ArchiveAccess
                     takeS = (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
                     if (_insertBuffer.Count > BUFFER_WARN_SIZE)
                     {
-                        Log.Warning("Archive insert buffer high level {Count} values", _insertBuffer.Count);
+                        var nowUtc = DateTime.UtcNow;
+                        if ((nowUtc - _lastWarnLogUtc).TotalSeconds >= WARN_LOG_INTERVAL_S)
+                        {
+                            _lastWarnLogUtc = nowUtc;
+                            Log.Warning("Archive insert buffer high level {Count} values", _insertBuffer.Count);
+                        }
                     }
 
                     if (_insertBuffer.Count > MAX_ARCHIVE_CHUNK_SIZE)
@@ -305,6 +315,7 @@ namespace DataLogLib.Services.ArchiveAccess
                 if (fromJournal)
                 {
                     _journal.Commit(archiveBuffer.Count);
+                    HandBackJournalRest();
                     LogJournal();
                 }
                 UpdateActualValues(archiveBuffer);
@@ -374,6 +385,33 @@ namespace DataLogLib.Services.ArchiveAccess
             {
                 Log.Error(ex, "Archive journal write failed");
                 CountDropped(values.Count);
+            }
+        }
+
+        /// <summary>
+        /// Moves the rest of the journal into the buffer once it is no more than one chunk, so new values go to the
+        /// buffer again. While the journal holds values, every new value goes there; it is only found empty when no
+        /// value arrived during the write of its last chunk, which a steady flow never allows (on the Raspberry Pi the
+        /// journal stayed at a few hundred values for hours and every value went over the SD card). The order is kept:
+        /// the buffer holds older values than the journal, and new values come after its rest. Within the buffer lock,
+        /// so no new value slips between. The values handed back are only in memory then, like any buffered value.
+        /// </summary>
+        private void HandBackJournalRest()
+        {
+            lock (_insertBuffer)
+            {
+                var rest = _journal.Count;
+                if (rest == 0 || rest > MAX_ARCHIVE_CHUNK_SIZE || _insertBuffer.Count + rest > BUFFER_MAX_SIZE)
+                {
+                    return;
+                }
+
+                // Peek reads one segment at a time, the rest may lie in two
+                for (var values = _journal.Peek(MAX_ARCHIVE_CHUNK_SIZE); values.Count > 0; values = _journal.Peek(MAX_ARCHIVE_CHUNK_SIZE))
+                {
+                    _journal.Commit(values.Count);
+                    _insertBuffer.AddRange(values);
+                }
             }
         }
 

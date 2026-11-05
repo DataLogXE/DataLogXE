@@ -38,6 +38,8 @@ namespace DataLogLib.Tests
         public bool FailWrites { get; set; }
         /// <summary>Every write throws while true (archive outage).</summary>
         public bool FailInserts { get; set; }
+        /// <summary>Called at the start of every write, e.g. to let values arrive while it runs.</summary>
+        public Action OnInsert { get; set; }
         public List<(string Uid, DateTime Start, DateTime End)> CoverageReads { get; } = [];
         public List<(string Uid, DateTime Start, DateTime End)> RawReads { get; } = [];
 
@@ -79,6 +81,7 @@ namespace DataLogLib.Tests
 
         public void InsertValues(List<ArchiveValue> values)
         {
+            OnInsert?.Invoke();
             if (FailInserts)
             {
                 throw new IOException("archive outage");
