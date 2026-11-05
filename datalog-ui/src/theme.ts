@@ -44,6 +44,18 @@ export interface ChartColors {
   now: string;
   cursors: [string, string];
   span: string;
+  /**
+   * The time grid (timeGrid.ts): bands of every other day and of the weekend, lines of midnight, hours and finer.
+   * Midnight in an accent color, so it does not read as a peak of the line: the accent blue in light, gold in dark,
+   * where the blue would be close to the cyan line. The hour lines lie above the series and are opaque, so they stay
+   * visible across the line.
+   */
+  dayBand: string;
+  weekendBand: string;
+  dayLine: string;
+  hourLine: string;
+  minuteLine: string;
+  dayText: string;
 }
 
 const LIGHT_CHART: ChartColors = {
@@ -57,7 +69,13 @@ const LIGHT_CHART: ChartColors = {
   yBorder: "grey",
   now: "#666666",
   cursors: ["#ab4e52", "#436b95"],
-  span: "#4a5d23"
+  span: "#4a5d23",
+  dayBand: "rgba(0,0,0,0.035)",
+  weekendBand: "rgba(40,70,170,0.06)",
+  dayLine: "rgba(29,111,191,0.6)",
+  hourLine: "#cccccc",
+  minuteLine: "rgba(0,0,0,0.16)",
+  dayText: "rgba(0,0,0,0.55)"
 };
 
 // The line in a bright cyan, axis, grid and tick text in muted grays; the cursors and the span muted, since they
@@ -73,7 +91,13 @@ const DARK_CHART: ChartColors = {
   yBorder: "#4d4d60",
   now: "#828294",
   cursors: ["#b36a34", "#8f42a7"],
-  span: "#077e52"
+  span: "#077e52",
+  dayBand: "rgba(255,255,255,0.035)",
+  weekendBand: "rgba(120,140,255,0.07)",
+  dayLine: "rgba(214,170,80,0.55)",
+  hourLine: "#45464f",
+  minuteLine: "rgba(170,172,195,0.22)",
+  dayText: "#8e91a1"
 };
 
 export function chartColors(): ChartColors {

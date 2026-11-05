@@ -28,7 +28,7 @@ services:
   # the app starts once the database is healthy.
   datalogxe:
     <<: *defaults
-    image: datalogxe/datalogxe:0.0.253
+    image: datalogxe/datalogxe:0.0.262
     init: true
     environment: {POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?}", DATALOG_MASTER_KEY: "${DATALOG_MASTER_KEY:-}"}
     volumes: [app-data:/app/data]
@@ -39,7 +39,7 @@ services:
   proxy:
     <<: *defaults
     image: caddy:2.10.2-alpine
-    labels: [datalogxe.version=0.0.253]
+    labels: [datalogxe.version=0.0.262]
     command: >-
       sh -c 'until wget -q -O /tmp/Caddyfile http://datalogxe:8080/api/caddyfile; do sleep 2; done;
       exec caddy run --config /tmp/Caddyfile --adapter caddyfile'

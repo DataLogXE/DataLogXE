@@ -178,6 +178,10 @@ const cache = new Map<number, { key: string; data: PlotPoints; at: number }>();
 const queue = createFetchQueue(MAX_PARALLEL_LOADS);
 const previewQueue = createFetchQueue(MAX_PARALLEL_PREVIEWS);
 
+// The plots out of view that missed a change of the range or a redraw; they catch up when they come into view.
+// Only the plots in view change their canvases while the range moves: Firefox on macOS stalls a frame for 100-200 ms
+// when many canvases change in it (its native compositor), and the others draw less as well.
+const behind = new Set<string>();
 let io: IntersectionObserver | null = null;
 let resizeObs: ResizeObserver | null = null;
 let live: { stop: () => void } | null = null;
@@ -186,14 +190,10 @@ let redrawRaf = 0;
 const { range, header } = useChartRange({
   initial: readChartRange(),
   onScale: (min, max) => {
-    for (const controller of controllers.values()) {
-      controller.setRange(min, max);
-    }
+    forEachInView((controller) => controller.setRange(min, max));
   },
   onPending: () => {
-    for (const controller of controllers.values()) {
-      controller.markPending();
-    }
+    forEachInView((controller) => controller.markPending());
   },
   onIdle: () => {
     writeChartRange(range.min, range.max);
@@ -285,10 +285,29 @@ function redrawAll() {
   }
   redrawRaf = window.requestAnimationFrame(() => {
     redrawRaf = 0;
-    for (const controller of controllers.values()) {
-      controller.redraw();
-    }
+    forEachInView((controller) => controller.redraw());
   });
+}
+
+// Runs fn for the plots in view; the others are marked to catch up (catchUp)
+function forEachInView(fn: (controller: PlotController) => void) {
+  for (const [key, controller] of controllers) {
+    if (visible.has(key)) {
+      fn(controller);
+    } else {
+      behind.add(key);
+    }
+  }
+}
+
+// A plot that comes into view takes the current range (which redraws it) and grays its line if the points do not
+// match it, before it loads
+function catchUp(key: string) {
+  const controller = controllers.get(key);
+  if (controller && behind.delete(key)) {
+    controller.setRange(range.min, range.max);
+    controller.markPending();
+  }
 }
 
 // The badge dX stays in view when the stack is scrolled: the first plot of which the badge would still be seen
@@ -376,6 +395,7 @@ const ctx: StackContext = markRaw({
   unregister(key: string) {
     controllers.delete(key);
     visible.delete(key);
+    behind.delete(key);
     const element = elements.get(key);
     if (element) {
       io?.unobserve(element);
@@ -522,6 +542,7 @@ onMounted(() => {
         }
         if (entry.isIntersecting) {
           visible.add(key);
+          catchUp(key);
           loadInView(key);
         } else {
           visible.delete(key);

@@ -25,6 +25,8 @@ import { chartColors, THEME_CHANGED_EVENT } from "../theme";
 import { dragAndZoomPlugin, type BoundsHandler } from "./dragAndZoom";
 import { LABEL_GAP_Y_PX, LABELS_MOVED_EVENT, obstacleRects, placeLabelRect, type Rect } from "./labelPlacement";
 import { touchGesturesPlugin } from "./touchGestures";
+import { timeGridPlugin } from "./timeGrid";
+import { drawTimingPlugins } from "./drawTiming";
 
 type PlotState = { locked: boolean; last: [number, number] | null; stale: boolean };
 
@@ -107,6 +109,7 @@ export function createTagPlot(options: TagPlotOptions): uPlot {
   const syncKey = options.syncKey;
   const stepped = uPlot.paths.stepped!({ align: 1 });
   const yState: PlotState = { locked: false, last: null, stale: false };
+  const timing = drawTimingPlugins();
   // The colors of the theme; while new points load the line is grayed, since the drawn ones no longer match the range
   const stroke = () => (yState.stale ? chartColors().staleLine : chartColors().line);
   const fill = isBool ? () => (yState.stale ? chartColors().staleFill : chartColors().boolFill) : undefined;
@@ -135,7 +138,8 @@ export function createTagPlot(options: TagPlotOptions): uPlot {
           font: AXIS_FONT,
           size: showXAxis ? X_AXIS_HEIGHT : HIDDEN_X_AXIS_HEIGHT,
           stroke: () => chartColors().axisText,
-          grid: { stroke: () => chartColors().grid },
+          // The vertical lines follow the calendar instead of the labels (timeGridPlugin)
+          grid: { show: false },
           ticks: { show: false },
           border: { show: true, stroke: () => chartColors().xBorder, width: 0 },
           space: (_self, _axisIdx, min, max, plotWidth) => timeAxisSpace(min, max, plotWidth),
@@ -193,6 +197,10 @@ export function createTagPlot(options: TagPlotOptions): uPlot {
           : {})
       },
       plugins: [
+        // First and last, so the timing (?perf) covers everything in between
+        timing.start,
+        // The day names stand in the plots with time labels, in a stack the first, every fourth and the last
+        timeGridPlugin({ dayNames: showXAxis }),
         dragAndZoomPlugin(onBounds, undefined, {
           canStart: options.canStartDrag && ((self, x) => options.canStartDrag!(self, x, "mouse"))
         }),
@@ -204,7 +212,8 @@ export function createTagPlot(options: TagPlotOptions): uPlot {
         axisBadgesPlugin(syncKey != null),
         nowLinePlugin(),
         themePlugin(),
-        ...(options.extraPlugins ?? [])
+        ...(options.extraPlugins ?? []),
+        timing.end
       ]
     },
     emptyAlignedData(xMin, xMax),

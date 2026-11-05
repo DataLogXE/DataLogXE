@@ -14,6 +14,9 @@
 			http_redirect
 			tls
 		}
+		# No HTTP/3: compose publishes the port for TCP only. With the Alt-Svc of h3, Firefox tries QUIC over UDP,
+		# gets no answer and waits for the fallback to HTTP/2 on its connections (the chart page got slow)
+		protocols h1 h2
 	}
 }
 
