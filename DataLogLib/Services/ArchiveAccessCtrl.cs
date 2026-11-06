@@ -82,6 +82,8 @@ namespace DataLogLib.Services
         private readonly ArchiveStatsWorker _statsWorker = new();
         private readonly CompressionWorker _compressionWorker = new();
         private CompressionRepairWorker _repairWorker;
+        private Timer _loadLevelTimer;
+        private static readonly TimeSpan LoadLevelRecheck = TimeSpan.FromMinutes(1);
         #endregion
 
         #region public methods
@@ -93,7 +95,16 @@ namespace DataLogLib.Services
             LoadGuard.Shared.Start(() => _insertWorker.Backlog);
             // The compression and retention policies of TimescaleDB pause with the background work of the app (those
             // paused by the last run are scheduled again in SetUidLookup, once the schema is there). The level when the task runs, so changes in quick succession end in the newest one
-            LoadGuard.Shared.LevelChanged += _ => Task.Run(() => _archive.ApplyLoadLevel(LoadGuard.Shared.Level));
+            LoadGuard.Shared.LevelChanged += _ => Task.Run(ApplyLoadLevel);
+            // Again every minute while the level lasts: a policy that ran when the level was entered is paused once it is
+            // done, and a compression is cancelled once the recording is at risk
+            _loadLevelTimer = new Timer(_ =>
+            {
+                if (LoadGuard.Shared.Level != LoadLevel.Normal)
+                {
+                    ApplyLoadLevel();
+                }
+            }, null, LoadLevelRecheck, LoadLevelRecheck);
             _statsWorker.Init(_archive, _insertWorker);
             // Compressed values that cannot be written are rebuilt from the raw values, as are the
             // levels missing before this startup and incomplete hours of the last days
@@ -103,6 +114,8 @@ namespace DataLogLib.Services
             new ArchiveRetentionJob(_archive).Start();
             new ArchiveCountWorker(_archive, GetCountBackfillDays(configuration), new LoadPacer(LoadPacer.MaxLoadFromEnvironment(), work: "Archive value counters")).Start();
         }
+
+        private void ApplyLoadLevel() => _archive.ApplyLoadLevel(LoadGuard.Shared.Level, LoadGuard.Shared.RecordingAtRisk);
 
         /// <summary>
         /// The journal on disk for the values the database cannot take in time; without a writable data folder the

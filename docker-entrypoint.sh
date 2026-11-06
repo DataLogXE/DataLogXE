@@ -20,14 +20,14 @@
 set -e
 
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p /app/data /app/logs
+  mkdir -p /app/data /app/data/logs
   # Up to 0.0.200 the OPC UA certificates had a volume of their own at /app/opcua. When it is still mounted,
   # its certificates move into the data volume once, so servers that trust the client certificate keep it.
   if [ -d /app/opcua/own ] && [ ! -e /app/data/opcua ]; then
     cp -a /app/opcua /app/data/opcua
     echo "Took over the OPC UA certificates from /app/opcua"
   fi
-  chown -R app:app /app/data /app/logs
+  chown -R app:app /app/data
   exec setpriv --reuid=app --regid=app --init-groups "$@"
 fi
 

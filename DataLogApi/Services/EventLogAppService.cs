@@ -291,6 +291,75 @@ namespace DataLogApi.Services
             };
         }
 
+        /// <summary>
+        /// The log of the whole system, newest first, paged like <see cref="GetSourceLog"/>. <paramref name="source"/>
+        /// is a data source id, 0 for the events of the application itself, or empty for all.
+        /// </summary>
+        public SourceLogPageDto GetSystemLog(
+            string before,
+            string after,
+            string level,
+            string component,
+            int? source,
+            string correlation,
+            string q,
+            int? limit,
+            CancellationToken cancellationToken = default)
+        {
+            if (!string.IsNullOrWhiteSpace(before) && !string.IsNullOrWhiteSpace(after))
+            {
+                throw new ArgumentException("Use either before or after.");
+            }
+
+            var pageLimit = limit.GetValueOrDefault(MaxLimit);
+            var query = BuildAppLogFilter(level, component, source, correlation, q);
+            query.BeforeUtc = string.IsNullOrWhiteSpace(before) ? null : ParseCursorUtc(before);
+            query.AfterUtc = string.IsNullOrWhiteSpace(after) ? null : ParseCursorUtc(after);
+            query.Limit = pageLimit <= 0 ? MaxLimit : Math.Min(pageLimit, MaxLimit);
+            var result = _eventLog.QueryAppLog(query, cancellationToken);
+            return new SourceLogPageDto
+            {
+                Items = result.Items.Select(ToSystemLogDto).ToList(),
+                Truncated = result.Truncated,
+                NextBefore = result.NextBeforeUtc.HasValue ? ToCursor(result.NextBeforeUtc.Value) : null
+            };
+        }
+
+        /// <summary>The filters of the system log; the level is checked here, so a bad one fails before a download starts.</summary>
+        public static AppLogQuery BuildAppLogFilter(string level, string component, int? source, string correlation, string q)
+        {
+            if (source is < 0)
+            {
+                throw new ArgumentException("Invalid source.");
+            }
+
+            var query = new AppLogQuery
+            {
+                SourceId = source,
+                MinLevel = NullIfEmpty(level),
+                Component = NormalizeFilter(component),
+                CorrelationId = NormalizeFilter(correlation),
+                Text = NormalizeFilter(q)
+            };
+            query.Validate();
+            return query;
+        }
+
+        public IAsyncEnumerable<EventLogRecord> ExportSystemLog(
+            AppLogQuery filter, DateTime fromUtc, DateTime toUtc, CancellationToken cancellationToken)
+        {
+            return _eventLog.ExportAppLog(filter, fromUtc, toUtc, cancellationToken);
+        }
+
+        private static SourceLogItemDto ToSystemLogDto(EventLogRecord record)
+        {
+            var item = ToSourceLogDto(record);
+            item.SourceId = record.SourceId;
+            item.SourceType = NullIfEmpty(record.SourceType);
+            item.CorrelationId = NullIfEmpty(record.CorrelationId);
+            return item;
+        }
+
         /// <summary>Warnings and errors of every data source in the last 24 hours.</summary>
         public List<SourceLogCountDto> GetSourceLogCounts(CancellationToken cancellationToken = default)
         {
@@ -321,7 +390,7 @@ namespace DataLogApi.Services
             };
         }
 
-        private static string ToCursor(DateTime timeUtc)
+        internal static string ToCursor(DateTime timeUtc)
         {
             return DateTime.SpecifyKind(timeUtc, DateTimeKind.Utc)
                 .ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", System.Globalization.DateTimeFormatInfo.InvariantInfo) + "Z";
@@ -473,7 +542,7 @@ namespace DataLogApi.Services
             return toUtc.AddHours(-24);
         }
 
-        private static DateTime ParseCursorUtc(string cursor)
+        internal static DateTime ParseCursorUtc(string cursor)
         {
             if (DateTime.TryParse(cursor, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
             {

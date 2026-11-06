@@ -28,14 +28,22 @@ namespace DataLogLib.Services.ArchiveAccess
 
         private readonly object _jobsLock = new();
 
+        // The compression jobs the load guard cancelled, started again at once when it is normal (a cancel counts as a
+        // failure, after which TimescaleDB waits the retry period, an hour for the raw values)
+        private readonly HashSet<int> _cancelledJobs = [];
+
         /// <summary>
         /// Pauses the compression and retention policies of TimescaleDB while the load guard is tense or critical, and
         /// schedules them again once it is normal. They run as background workers in the database, outside the pools of
-        /// the app: a compression of a chunk reads and rewrites it on the SD card. Critical also cancels a compression
-        /// that runs; it loses only the chunk it was at, which the next run compresses. Policies that were unscheduled
-        /// before (by hand) are left as they are.
+        /// the app: a compression of a chunk reads and rewrites it on the SD card. A policy that runs is not paused:
+        /// TimescaleDB stops a running job that is unscheduled, and the compression of a large chunk raises the load
+        /// itself, so it would be stopped again on every run and no chunk would ever be compressed (seen on an IOT2050,
+        /// 22 runs in a row stopped after about 2 minutes). It is paused once it is done; call this again while the
+        /// level lasts. A running compression is cancelled only when the recording is at risk; it loses only the chunk
+        /// it was at, and it starts again as soon as the guard is normal. Policies that were unscheduled before (by
+        /// hand) are left as they are.
         /// </summary>
-        public void ApplyLoadLevel(LoadLevel level)
+        public void ApplyLoadLevel(LoadLevel level, bool recordingAtRisk = false)
         {
             lock (_jobsLock)
             {
@@ -48,7 +56,7 @@ namespace DataLogLib.Services.ArchiveAccess
                     }
 
                     PauseJobs();
-                    if (level == LoadLevel.Critical)
+                    if (level == LoadLevel.Critical && recordingAtRisk)
                     {
                         CancelRunningCompression();
                     }
@@ -80,6 +88,20 @@ namespace DataLogLib.Services.ArchiveAccess
                 {
                     Log.Information("TimescaleDB policies scheduled again: {Count}", resumed);
                 }
+
+                if (_cancelledJobs.Count > 0)
+                {
+                    using var restart = connection.CreateCommand();
+                    restart.CommandText = "SELECT count(*) FROM timescaledb_information.jobs j, "
+                        + "LATERAL alter_job(j.job_id, next_start => now()) WHERE j.job_id = ANY(@ids) AND j.scheduled";
+                    restart.Parameters.AddWithValue("ids", _cancelledJobs.ToArray());
+                    var restarted = Convert.ToInt64(restart.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
+                    _cancelledJobs.Clear();
+                    if (restarted > 0)
+                    {
+                        Log.Information("TimescaleDB compression cancelled by the load guard starts again: {Count}", restarted);
+                    }
+                }
             }
         }
 
@@ -89,9 +111,10 @@ namespace DataLogLib.Services.ArchiveAccess
             using var transaction = connection.BeginTransaction();
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            // The ids are stored before the jobs are paused, in one transaction
-            command.CommandText = "WITH jobs AS (SELECT job_id FROM timescaledb_information.jobs "
-                + "WHERE proc_name IN ('policy_compression', 'policy_retention') AND scheduled), "
+            // The ids are stored before the jobs are paused, in one transaction; a job that runs is left scheduled
+            command.CommandText = "WITH jobs AS (SELECT j.job_id FROM timescaledb_information.jobs j "
+                + "WHERE j.proc_name IN ('policy_compression', 'policy_retention') AND j.scheduled "
+                + "AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = j.application_name)), "
                 + "stored AS (INSERT INTO parameter (key, value) "
                 + "SELECT @key, coalesce(string_agg(job_id::text, ','), '') FROM (SELECT job_id FROM jobs UNION "
                 + "SELECT unnest(string_to_array(value, ','))::int FROM parameter WHERE key = @key AND value <> '') ids "
@@ -110,12 +133,21 @@ namespace DataLogLib.Services.ArchiveAccess
         {
             using var connection = _dataSource.OpenConnection();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT count(pg_cancel_backend(pid)) FROM pg_stat_activity "
-                + "WHERE application_name LIKE 'Compression Policy%' OR backend_type LIKE 'Compression Policy%'";
-            var cancelled = Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
+            // The cancel in the select list of the materialized match: in a WHERE the planner may push it down to the scan
+            // of pg_stat_activity, where it would cancel every session
+            command.CommandText = "WITH running AS MATERIALIZED (SELECT j.job_id, a.pid FROM timescaledb_information.jobs j "
+                + "JOIN pg_stat_activity a ON a.application_name = j.application_name WHERE j.proc_name = 'policy_compression') "
+                + "SELECT job_id FROM running WHERE (SELECT pg_cancel_backend(running.pid))";
+            using var reader = command.ExecuteReader();
+            var cancelled = 0;
+            while (reader.Read())
+            {
+                _cancelledJobs.Add(reader.GetInt32(0));
+                cancelled++;
+            }
             if (cancelled > 0)
             {
-                Log.Warning("A running compression of TimescaleDB was cancelled by the load guard");
+                Log.Warning("A running compression of TimescaleDB was cancelled by the load guard, the recording is at risk");
             }
         }
     }

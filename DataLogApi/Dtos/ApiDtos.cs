@@ -607,6 +607,16 @@ namespace DataLogApi.Dtos
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string Props { get; set; }
+
+        // Only in the system log, which spans every source
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? SourceId { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string SourceType { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string CorrelationId { get; set; }
     }
 
     public class SourceLogPageDto

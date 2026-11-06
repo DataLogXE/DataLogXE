@@ -52,7 +52,7 @@ namespace DataLogLib.Services.EventLog
 
             if (logEvent.Exception != null)
             {
-                record.Exception = Truncate(logEvent.Exception.ToString(), EventLogConstants.MaxExceptionChars);
+                record.Exception = Truncate(Common.Serilog.LogRedaction.Redact(logEvent.Exception.ToString()), EventLogConstants.MaxExceptionChars);
             }
 
             var sourceId = 0;

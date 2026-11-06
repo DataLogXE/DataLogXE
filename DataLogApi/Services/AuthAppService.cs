@@ -194,7 +194,7 @@ namespace DataLogApi.Services
                 user.SecurityStamp = AppUserModel.NewSecurityStamp();
                 _service.DataAccess.AppUserUpdate(user);
                 Forget(id);
-                Log.Information("Auth: {ByUser} changed user {UserName} (role {Role}, password {Password})", byUser,
+                Log.Information("Auth: {ByUser} changed user {UserName} (role {Role}, password {PasswordAction})", byUser,
                     user.Name, user.Role, string.IsNullOrEmpty(dto?.Password) ? "kept" : "reset");
             }
 

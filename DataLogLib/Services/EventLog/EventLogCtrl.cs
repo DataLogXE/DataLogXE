@@ -245,6 +245,27 @@ namespace DataLogLib.Services.EventLog
             return _appStore.QuerySourceLog(query, cancellationToken);
         }
 
+        public SourceLogResult QueryAppLog(AppLogQuery query, CancellationToken cancellationToken = default)
+        {
+            if (_appStore == null)
+            {
+                return new SourceLogResult();
+            }
+
+            return _appStore.QueryAppLog(query, cancellationToken);
+        }
+
+        public IAsyncEnumerable<EventLogRecord> ExportAppLog(
+            AppLogQuery query, DateTime fromUtc, DateTime toUtc, CancellationToken cancellationToken = default)
+        {
+            if (_appStore == null)
+            {
+                return AsyncEnumerable.Empty<EventLogRecord>();
+            }
+
+            return _appStore.ExportAppLog(query, fromUtc, toUtc, cancellationToken);
+        }
+
         public List<SourceLogCount> QuerySourceLogCounts(DateTime fromUtc, CancellationToken cancellationToken = default)
         {
             if (_appStore == null)

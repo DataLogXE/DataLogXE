@@ -50,6 +50,7 @@ const router = createRouter({
     { path: "/settings/events", redirect: "/settings/archive" },
     { path: "/settings/account", name: "settings-account", component: SettingsPage },
     { path: "/settings/users", name: "settings-users", component: SettingsPage, meta: { admin: true } },
+    { path: "/settings/log", name: "settings-log", component: SettingsPage, meta: { admin: true } },
     { path: "/datasources", name: "datasources", component: DataSourceListPage },
     { path: "/datasources/new", name: "datasource-new", component: DataSourceFormPage, meta: { admin: true } },
     { path: "/datasources/:id/tags", name: "datasource-tags", component: DataSourceTagListPage },

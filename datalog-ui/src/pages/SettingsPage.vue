@@ -101,6 +101,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             <UsersCard />
           </div>
 
+          <SystemLogSection v-else-if="section === 'log'" />
+
           <template v-else>
             <p v-if="error" class="error-text">{{ error }}</p>
             <div v-else-if="archive" class="settings-sections">
@@ -140,12 +142,13 @@ import {
 import RetentionCard from "../components/RetentionCard.vue";
 import AccountCard from "../components/AccountCard.vue";
 import UsersCard from "../components/UsersCard.vue";
+import SystemLogSection from "../components/SystemLogSection.vue";
 import { isAdmin } from "../session";
 import { formatDateTime } from "../format";
 import { setThemePreference, themePreference, type ThemePreference } from "../theme";
 import type { ArchiveSettings, OpcUaCertificateInfo } from "../types";
 
-type Section = "general" | "archive" | "account" | "users";
+type Section = "general" | "archive" | "account" | "users" | "log";
 
 const appVersion = `v${__APP_VERSION__}`;
 const themeOptions: { value: ThemePreference; label: string }[] = [
@@ -164,13 +167,21 @@ const section = computed<Section>(() => {
   if (route.name === "settings-users") {
     return "users";
   }
+  if (route.name === "settings-log") {
+    return "log";
+  }
   return "general";
 });
 const sections = computed(() => [
   { to: "/settings", label: "General", exact: true },
   { to: "/settings/archive", label: "Archive", exact: false },
   { to: "/settings/account", label: "Account", exact: false },
-  ...(isAdmin.value ? [{ to: "/settings/users", label: "Users", exact: false }] : [])
+  ...(isAdmin.value
+    ? [
+        { to: "/settings/users", label: "Users", exact: false },
+        { to: "/settings/log", label: "System log", exact: false }
+      ]
+    : [])
 ]);
 
 const archive = ref<ArchiveSettings | null>(null);
@@ -246,7 +257,7 @@ async function loadArchive() {
 }
 
 watch(section, (value) => {
-  if (value === "account" || value === "users") {
+  if (value === "account" || value === "users" || value === "log") {
     controller?.abort();
     return;
   }

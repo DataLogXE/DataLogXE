@@ -84,6 +84,7 @@ namespace DataLogLib.Services
         private long _lastSwapAt;
         private LoadLevel _level;
         private string _reason = "";
+        private bool _recordingAtRisk;
         private int _above;
         private int _below;
         private long _since = Stopwatch.GetTimestamp();
@@ -122,6 +123,27 @@ namespace DataLogLib.Services
                 }
             }
         }
+
+        /// <summary>
+        /// True when the last sample put the recording of values at risk: the insert buffer, the available memory or the
+        /// reads from swap at the critical limit. A high load alone is not, it is also caused by the background work
+        /// itself (a compression of TimescaleDB reads and writes the SD card).
+        /// </summary>
+        public bool RecordingAtRisk
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _recordingAtRisk;
+                }
+            }
+        }
+
+        internal static bool PutsRecordingAtRisk(LoadReadings r)
+            => r.InsertBacklog > CriticalInsertBacklog
+                || r.MemAvailableBytes is long memory && memory < CriticalMemAvailableBytes
+                || r.SwapInPagesPerSec is double swap && swap > CriticalSwapInPagesPerSec;
 
         /// <summary>How long the current level lasts.</summary>
         public TimeSpan LevelFor
@@ -275,6 +297,7 @@ namespace DataLogLib.Services
             TaskCompletionSource changed = null;
             lock (_lock)
             {
+                _recordingAtRisk = PutsRecordingAtRisk(readings);
                 var from = _level;
                 if (sampled > _level)
                 {

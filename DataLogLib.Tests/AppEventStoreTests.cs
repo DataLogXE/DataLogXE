@@ -152,6 +152,73 @@ namespace DataLogLib.Tests
             Assert.Contains("\"DsName\":\"plc\"", record.Props);
         }
 
+        [Fact]
+        public void SystemLogReadsEverySourceAndFilters()
+        {
+            if (_store == null)
+            {
+                return;
+            }
+
+            var app = Point(0, _now.AddMinutes(-3), "Warning", "archive slow");
+            app.Component = "archive";
+            var s3 = Point(3, _now.AddMinutes(-2), "Information", "s3 connected");
+            var s4 = Point(4, _now.AddMinutes(-1), "Error", "s4 failed");
+            s4.CorrelationId = "op-42";
+            Insert([app, s3, s4]);
+
+            var all = _store.QueryAppLog(new AppLogQuery());
+            Assert.Equal(["s4 failed", "s3 connected", "archive slow"], all.Items.Select(r => r.Message));
+            Assert.Equal([4, 3, 0], all.Items.Select(r => r.SourceId));
+            Assert.Equal("op-42", all.Items[0].CorrelationId);
+
+            Assert.Equal(["archive slow"], _store.QueryAppLog(new AppLogQuery { SourceId = 0 }).Items.Select(r => r.Message));
+            Assert.Equal(["archive slow"], _store.QueryAppLog(new AppLogQuery { Component = "archive" }).Items.Select(r => r.Message));
+            Assert.Equal(["s4 failed"], _store.QueryAppLog(new AppLogQuery { CorrelationId = "op-42" }).Items.Select(r => r.Message));
+            Assert.Equal(["s4 failed", "archive slow"],
+                _store.QueryAppLog(new AppLogQuery { MinLevel = "Warning" }).Items.Select(r => r.Message));
+
+            // The log of a data source stays the same
+            Assert.Equal(["s3 connected"], _store.QuerySourceLog(new SourceLogQuery { SourceId = 3 }).Items.Select(r => r.Message));
+        }
+
+        [Fact]
+        public async Task ExportReadsOldestFirstOverSeveralDays()
+        {
+            if (_store == null)
+            {
+                return;
+            }
+
+            Insert([
+                Point(0, _now.AddHours(-1), "Error", "newest"),
+                Point(3, _now.AddDays(-3), "Warning", "oldest"),
+                Point(0, _now.AddDays(-1.5), "Information", "middle")
+            ]);
+
+            var all = new List<string>();
+            await foreach (var record in _store.ExportAppLog(new AppLogQuery(), _now.AddDays(-4), _now.AddMinutes(1)))
+            {
+                all.Add(record.Message);
+            }
+
+            Assert.Equal(["oldest", "middle", "newest"], all);
+
+            var problems = new List<string>();
+            await foreach (var record in _store.ExportAppLog(new AppLogQuery { MinLevel = "Warning" }, _now.AddDays(-4), _now.AddMinutes(1)))
+            {
+                problems.Add(record.Message);
+            }
+
+            Assert.Equal(["oldest", "newest"], problems);
+        }
+
+        [Fact]
+        public void UnknownLevelIsRejected()
+        {
+            Assert.Throws<ArgumentException>(() => new AppLogQuery { MinLevel = "Loud" }.Validate());
+        }
+
         private void Insert(IEnumerable<EventLogRecord> records)
         {
             _store.InsertEventPoints(records.Select(r => r.ToPoint()).ToList());

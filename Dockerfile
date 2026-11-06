@@ -38,8 +38,9 @@ COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV ASPNETCORE_URLS=http://+:8080
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 # The process runs as "app" (see docker-entrypoint.sh), so its log, data and certificates live in folders it owns.
-# /app/data is the one volume of the app: master.key, the OPC UA certificates and the XML import work folder.
-ENV LOG_PATH=/app/logs
+# /app/data is the one volume of the app: master.key, the OPC UA certificates, the XML import work folder and the
+# log files, which so outlive an update and go into the support bundle.
+ENV LOG_PATH=/app/data/logs
 ENV DATA_PATH=/app/data
 ENV OPCUA_CERT_PATH=/app/data/opcua
 # The database service of the compose file; the app builds its connection from POSTGRES_PASSWORD

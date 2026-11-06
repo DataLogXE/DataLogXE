@@ -31,6 +31,7 @@ import type {
   DataSourceListItem,
   SourceLogCount,
   SourceLogPage,
+  AppLogParams,
   DataSourceWrite,
   DataTagActualValues,
   DataTagDetailsList,
@@ -417,7 +418,7 @@ export function getDataSources(signal?: AbortSignal): Promise<DataSourceListItem
 
 export function getDataSourceLog(
   id: number,
-  params: { before?: string; after?: string; level?: string; q?: string; limit?: number },
+  params: AppLogParams,
   signal?: AbortSignal
 ): Promise<SourceLogPage> {
   const query = new URLSearchParams();
@@ -428,6 +429,57 @@ export function getDataSourceLog(
   }
   const suffix = query.size ? `?${query}` : "";
   return apiRequest<SourceLogPage>(`/api/datasources/${id}/log${suffix}`, { signal, timeoutMs: READ_TIMEOUT_MS });
+}
+
+function logQuery(params: Record<string, string | number | boolean | undefined>): URLSearchParams {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      query.set(key, String(value));
+    }
+  }
+  return query;
+}
+
+/** The log of the whole system (administrator only), newest first, paged like the log of a data source. */
+export function getSystemLog(params: AppLogParams, signal?: AbortSignal): Promise<SourceLogPage> {
+  const query = logQuery({ ...params });
+  const suffix = query.size ? `?${query}` : "";
+  return apiRequest<SourceLogPage>(`/api/system/log${suffix}`, { signal, timeoutMs: READ_TIMEOUT_MS });
+}
+
+/** Filters, range (ISO 8601) and format of a download of the system log. */
+export interface SystemLogExportParams {
+  from: string;
+  to: string;
+  format: "csv" | "ndjson";
+  decimalComma: boolean;
+  level?: string;
+  q?: string;
+  component?: string;
+  source?: string | number;
+  correlation?: string;
+}
+
+/**
+ * The URL of the system log as a download, which the server streams while it reads; checkSystemLogExport asks first
+ * whether the server accepts it, since a download cannot show an error.
+ */
+export function systemLogExportUrl(params: SystemLogExportParams): string {
+  return `/api/system/log/export?${logQuery({ ...params })}`;
+}
+
+export function checkSystemLogExport(params: SystemLogExportParams, signal?: AbortSignal): Promise<void> {
+  return apiRequest<void>(`/api/system/log/export?${logQuery({ ...params, check: true })}`, { signal });
+}
+
+/** The support bundle: the log, the log files and the state of the system as one ZIP file. */
+export function diagnosticsUrl(hours: number): string {
+  return `/api/system/diagnostics.zip?${logQuery({ hours })}`;
+}
+
+export function checkDiagnostics(hours: number, signal?: AbortSignal): Promise<void> {
+  return apiRequest<void>(`/api/system/diagnostics.zip?${logQuery({ hours, check: true })}`, { signal });
 }
 
 export function getDataSourceLogCounts(signal?: AbortSignal): Promise<SourceLogCount[]> {

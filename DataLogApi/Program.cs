@@ -76,14 +76,19 @@ var logFile = Path.Combine(logFolder,
     assemblyPath == null ? "DataLogApi" : Path.GetFileNameWithoutExtension(assemblyPath));
 
 var serilogSink = new SerilogSink();
+// Secrets are masked before any sink sees an event. Ten files of 10 MB: the log of weeks on a Pi, and a bound for the
+// support bundle.
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
-    .WriteTo.File($"{logFile}.log", fileSizeLimitBytes: 10 * 1024 * 1024, rollOnFileSizeLimit: true)
+    .Enrich.With(new SecretRedactionEnricher())
+    .WriteTo.File($"{logFile}.log", fileSizeLimitBytes: LogFiles.FileSizeLimitBytes, rollOnFileSizeLimit: true,
+        retainedFileCountLimit: LogFiles.RetainedFileCount)
     .WriteTo.Sink(serilogSink)
     .CreateLogger();
 
 builder.Host.UseSerilog();
 builder.Services.AddSingleton(serilogSink);
+builder.Services.AddSingleton(new LogFiles(logFolder, Path.GetFileName(logFile)));
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -194,6 +199,7 @@ try
     app.UseAuthentication();
     app.UseApiAccess();
     app.MapApiEndpoints();
+    app.MapSystemEndpoints();
     app.MapFallbackToFile("index.html");
 
     Log.Information("Starting DataLogApi");

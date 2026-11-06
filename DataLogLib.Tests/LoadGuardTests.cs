@@ -46,6 +46,22 @@ namespace DataLogLib.Tests
         }
 
         [Fact]
+        public void A_high_load_alone_does_not_put_the_recording_at_risk()
+        {
+            Assert.False(LoadGuard.PutsRecordingAtRisk(Calm with { LoadPerCore = 3, PoolWait = TimeSpan.FromSeconds(5) }));
+            Assert.False(LoadGuard.PutsRecordingAtRisk(Calm with { InsertBacklog = 0.3, SwapInPagesPerSec = 300 }));
+            Assert.True(LoadGuard.PutsRecordingAtRisk(Calm with { InsertBacklog = 0.7 }));
+            Assert.True(LoadGuard.PutsRecordingAtRisk(Calm with { MemAvailableBytes = 80L << 20 }));
+            Assert.True(LoadGuard.PutsRecordingAtRisk(Calm with { SwapInPagesPerSec = 1500 }));
+
+            var guard = new LoadGuard(() => null, () => null, () => null);
+            guard.Apply(Calm with { LoadPerCore = 3 });
+            Assert.False(guard.RecordingAtRisk);
+            guard.Apply(Calm with { InsertBacklog = 0.9 });
+            Assert.True(guard.RecordingAtRisk);
+        }
+
+        [Fact]
         public void A_level_is_entered_after_two_samples_and_left_one_step_at_a_time()
         {
             var guard = new LoadGuard(() => null, () => null, () => null);

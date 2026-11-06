@@ -1268,6 +1268,63 @@ namespace DataLogLib.Tests
             }
         }
 
+        [Fact]
+        public void The_load_guard_lets_a_running_compression_finish_unless_the_recording_is_at_risk()
+        {
+            if (_archive == null)
+            {
+                return;
+            }
+
+            Execute($"DELETE FROM parameter WHERE key = '{TimescaleArchive.PausedJobsKey}'");
+            var job = Scalar("SELECT job_id FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' "
+                + "AND hypertable_name = 'archiveraw'");
+            var name = Scalar($"SELECT application_name FROM timescaledb_information.jobs WHERE job_id = {job}");
+            // A session under the name of the job stands for its background worker while it compresses a chunk
+            var builder = new NpgsqlConnectionStringBuilder(TestPostgres.ConnectionString) { ApplicationName = name, Pooling = false };
+            using var running = new NpgsqlConnection(builder.ConnectionString);
+            running.Open();
+            using var sleep = new NpgsqlCommand("SELECT pg_sleep(30)", running) { CommandTimeout = 60 };
+            var compressing = sleep.ExecuteNonQueryAsync();
+            try
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (Scalar($"SELECT count(*) FROM pg_stat_activity WHERE application_name = '{name}' AND state = 'active'") == "0")
+                {
+                    Assert.True(DateTime.UtcNow < deadline, "the session of the job does not run");
+                    Thread.Sleep(50);
+                }
+
+                // Tense and critical by the load alone pause the other policies, the running one goes on
+                _archive.ApplyLoadLevel(LoadLevel.Tense);
+                _archive.ApplyLoadLevel(LoadLevel.Critical);
+                Assert.Equal("True", Scalar($"SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = {job}"));
+                Assert.Equal("0", Scalar("SELECT count(*) FROM timescaledb_information.jobs "
+                    + $"WHERE proc_name IN ('policy_compression', 'policy_retention') AND scheduled AND job_id <> {job}"));
+                Assert.False(compressing.IsCompleted);
+
+                // At risk, it is cancelled
+                _archive.ApplyLoadLevel(LoadLevel.Critical, recordingAtRisk: true);
+                Assert.ThrowsAny<Exception>(() => compressing.GetAwaiter().GetResult());
+                Assert.Equal("True", Scalar($"SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = {job}"));
+
+                // Once it is done (cancelled here; the worker of the job exits then), the next check pauses it as well
+                running.Close();
+                _archive.ApplyLoadLevel(LoadLevel.Tense);
+                Assert.Equal("False", Scalar($"SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = {job}"));
+
+                // Normal: scheduled again, and the cancelled one starts at once
+                Execute($"SELECT alter_job({job}, next_start => now() + interval '1 hour')");
+                _archive.ApplyLoadLevel(LoadLevel.Normal);
+                Assert.Equal("True", Scalar($"SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = {job}"));
+                Assert.Equal("True", Scalar($"SELECT next_start <= now() FROM timescaledb_information.jobs WHERE job_id = {job}"));
+            }
+            finally
+            {
+                _archive.ResumePausedJobs();
+            }
+        }
+
         private static DateTime ReadCountTime(string key)
             => DateTimeOffset.FromUnixTimeSeconds(long.Parse(Scalar($"SELECT value FROM parameter WHERE key = '{key}'"))).UtcDateTime;
 

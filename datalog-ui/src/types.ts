@@ -546,6 +546,22 @@ export interface SourceLogItem {
   message: string;
   exception?: string;
   props?: string;
+  // Only in the system log
+  sourceId?: number;
+  sourceType?: string;
+  correlationId?: string;
+}
+
+/** The filters and cursor of a read of an application log (data source log or system log). */
+export interface AppLogParams {
+  before?: string;
+  after?: string;
+  level?: string;
+  q?: string;
+  limit?: number;
+  component?: string;
+  source?: string | number;
+  correlation?: string;
 }
 
 export interface SourceLogPage {

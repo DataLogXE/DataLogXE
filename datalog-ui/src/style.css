@@ -2022,6 +2022,129 @@ th {
   }
 }
 
+/* The log view shared by the data source log and the system log fills the space below its header */
+.app-log {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The system log adds a column with the source or component of each event */
+.source-log.with-source .source-log-row {
+  grid-template-columns: max-content 4.5rem fit-content(10rem) minmax(0, 1fr);
+}
+
+/* Where the log is narrow (a phone, or beside the settings menu), the message takes a line of its own */
+.source-log-scroll {
+  container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+  .source-log .source-log-row,
+  .source-log.with-source .source-log-row {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    row-gap: 0.15rem;
+  }
+
+  .source-log-message {
+    grid-column: 1 / -1;
+  }
+}
+
+.source-log-source {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-log-correlation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* Settings > System log: the log fills the settings area */
+.system-log {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 24rem;
+}
+
+.system-log-select {
+  height: var(--control-size);
+  max-width: 12rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  padding: 0 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--font-ui);
+}
+
+.system-log-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: var(--control-size);
+  padding: 0 0.2rem 0 0.6rem;
+  border-radius: 999px;
+  background: rgba(29, 111, 191, 0.12);
+  color: var(--accent);
+  font-size: var(--font-ui);
+}
+
+.system-log-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.system-log-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  width: min(30rem, calc(100vw - 2rem));
+}
+
+.system-log-dialog header .hint {
+  margin: 0.35rem 0 0;
+}
+
+.system-log-dialog-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.system-log-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+@media (max-width: 720px) {
+  .system-log-actions {
+    margin-left: 0;
+  }
+}
+
 /* The type of the source in front of its name, in the line of the title */
 .tag-page-type-icon {
   width: 1em;

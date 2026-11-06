@@ -25,7 +25,7 @@ namespace DataLogLib.Services.EventLog
 {
     /// <summary>
     /// The application log (every event but the process events) in the appevent hypertable. The Timescale
-    /// policies compress it after a day and keep it two weeks. Read only by the log of a data source.
+    /// policies compress it after a day and keep it two weeks. Read by the log of a data source and the system log.
     /// </summary>
     internal sealed class AppEventStore
     {
@@ -89,6 +89,23 @@ namespace DataLogLib.Services.EventLog
         /// </summary>
         public SourceLogResult QuerySourceLog(SourceLogQuery query, CancellationToken cancellationToken = default)
         {
+            return QueryAppLog(new AppLogQuery
+            {
+                SourceId = query.SourceId,
+                BeforeUtc = query.BeforeUtc,
+                AfterUtc = query.AfterUtc,
+                MinLevel = query.MinLevel,
+                Text = query.Text,
+                Limit = query.Limit
+            }, cancellationToken);
+        }
+
+        /// <summary>
+        /// The application log, newest first, paged like <see cref="QuerySourceLog"/>; every filter is optional, so
+        /// without one it is the log of the whole system.
+        /// </summary>
+        public SourceLogResult QueryAppLog(AppLogQuery query, CancellationToken cancellationToken = default)
+        {
             var limit = Math.Clamp(query.Limit, 1, EventLogConstants.MaxQueryLimit);
             var nowUtc = DateTime.UtcNow;
             var toUtc = query.AfterUtc.HasValue ? nowUtc.AddMinutes(1) : Min(query.BeforeUtc ?? nowUtc.AddMinutes(1), nowUtc.AddMinutes(1));
@@ -109,43 +126,17 @@ namespace DataLogLib.Services.EventLog
             using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
             var where = query.AfterUtc.HasValue ? "time > @from AND time < @to" : "time >= @from AND time < @to";
-            command.Parameters.AddWithValue("@source", query.SourceId);
             command.Parameters.AddWithValue("@from", NpgsqlDbType.TimestampTz, fromUtc);
             command.Parameters.AddWithValue("@to", NpgsqlDbType.TimestampTz, toUtc);
-            var levels = LevelsFrom(query.MinLevel);
-            if (levels != null)
-            {
-                where += " AND level = ANY(@levels)";
-                command.Parameters.AddWithValue("@levels", levels);
-            }
-
-            var text = EventTextFilter.Parse(query.Text);
-            if (!text.IsEmpty)
-            {
-                where += " AND (message ILIKE @search OR exception ILIKE @search)";
-                command.Parameters.AddWithValue("@search", text.LikePattern);
-            }
-
-            command.CommandText = "SELECT time, level, component, source_type, message, exception, props "
-                + $"FROM {TableName} WHERE source_id = @source AND {where} ORDER BY time DESC LIMIT @fetch";
+            where += FilterSql(query, command);
+            command.CommandText = $"SELECT {ReadColumns} FROM {TableName} WHERE {where} ORDER BY time DESC LIMIT @fetch";
             command.Parameters.AddWithValue("@fetch", limit + 1);
             using (var registration = cancellationToken.Register(command.Cancel))
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
-                    result.Items.Add(new EventLogRecord
-                    {
-                        TimeUtc = DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc),
-                        Level = reader.GetString(1),
-                        Kind = "datasource",
-                        Component = reader.GetString(2),
-                        SourceId = query.SourceId,
-                        SourceType = reader.GetString(3),
-                        Message = reader.GetString(4),
-                        Exception = reader.GetString(5),
-                        Props = reader.GetString(6)
-                    });
+                    result.Items.Add(ReadRecord(reader));
                 }
             }
 
@@ -170,6 +161,102 @@ namespace DataLogLib.Services.EventLog
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Every event from <paramref name="fromUtc"/> to <paramref name="toUtc"/> that matches the filters of
+        /// <paramref name="query"/> (its paging fields are ignored), oldest first. Read one window at a time, so an
+        /// export never decompresses more than a day at once and never holds more than one row.
+        /// </summary>
+        public async IAsyncEnumerable<EventLogRecord> ExportAppLog(
+            AppLogQuery query,
+            DateTime fromUtc,
+            DateTime toUtc,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var oldestUtc = DateTime.UtcNow - Retention;
+            if (fromUtc < oldestUtc)
+            {
+                fromUtc = oldestUtc;
+            }
+
+            for (var windowFrom = fromUtc; windowFrom < toUtc; windowFrom += SourceLogWindow)
+            {
+                var windowTo = Min(windowFrom + SourceLogWindow, toUtc);
+                await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.CommandTimeout = 0;
+                command.Parameters.AddWithValue("@from", NpgsqlDbType.TimestampTz, windowFrom);
+                command.Parameters.AddWithValue("@to", NpgsqlDbType.TimestampTz, windowTo);
+                var where = "time >= @from AND time < @to" + FilterSql(query, command);
+                command.CommandText = $"SELECT {ReadColumns} FROM {TableName} WHERE {where} ORDER BY time";
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    yield return ReadRecord(reader);
+                }
+            }
+        }
+
+        private const string ReadColumns =
+            "time, level, kind, component, source_id, affected_source_id, source_type, message, template, exception, props, correlation_id";
+
+        /// <summary>The filters of the query as " AND ..." conditions, with their parameters added to the command.</summary>
+        private static string FilterSql(AppLogQuery query, NpgsqlCommand command)
+        {
+            var where = "";
+            if (query.SourceId.HasValue)
+            {
+                where += " AND source_id = @source";
+                command.Parameters.AddWithValue("@source", query.SourceId.Value);
+            }
+
+            var levels = LevelsFrom(query.MinLevel);
+            if (levels != null)
+            {
+                where += " AND level = ANY(@levels)";
+                command.Parameters.AddWithValue("@levels", levels);
+            }
+
+            if (!string.IsNullOrWhiteSpace(query.Component))
+            {
+                where += " AND component = @component";
+                command.Parameters.AddWithValue("@component", query.Component.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(query.CorrelationId))
+            {
+                where += " AND correlation_id = @correlation";
+                command.Parameters.AddWithValue("@correlation", query.CorrelationId.Trim());
+            }
+
+            var text = EventTextFilter.Parse(query.Text);
+            if (!text.IsEmpty)
+            {
+                where += " AND (message ILIKE @search OR exception ILIKE @search)";
+                command.Parameters.AddWithValue("@search", text.LikePattern);
+            }
+
+            return where;
+        }
+
+        private static EventLogRecord ReadRecord(NpgsqlDataReader reader)
+        {
+            return new EventLogRecord
+            {
+                TimeUtc = DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc),
+                Level = reader.GetString(1),
+                Kind = reader.GetString(2),
+                Component = reader.GetString(3),
+                SourceId = reader.GetInt32(4),
+                AffectedSourceId = reader.GetInt32(5),
+                SourceType = reader.GetString(6),
+                Message = reader.GetString(7),
+                Template = reader.GetString(8),
+                Exception = reader.GetString(9),
+                Props = reader.GetString(10),
+                CorrelationId = reader.GetString(11)
+            };
         }
 
         /// <summary>Warnings and errors of every data source since <paramref name="fromUtc"/>, by source and level.</summary>
@@ -222,6 +309,26 @@ namespace DataLogLib.Services.EventLog
         public string MinLevel { get; set; }
         public string Text { get; set; }
         public int Limit { get; set; } = EventLogConstants.DefaultQueryLimit;
+    }
+
+    /// <summary>A read of the application log; every filter is optional.</summary>
+    public sealed class AppLogQuery
+    {
+        /// <summary>Only the events of this data source; 0 for the events of the application itself.</summary>
+        public int? SourceId { get; set; }
+        public DateTime? BeforeUtc { get; set; }
+        public DateTime? AfterUtc { get; set; }
+        public string MinLevel { get; set; }
+        public string Component { get; set; }
+        public string CorrelationId { get; set; }
+        public string Text { get; set; }
+        public int Limit { get; set; } = EventLogConstants.DefaultQueryLimit;
+
+        /// <summary>Throws an <see cref="ArgumentException"/> for an unknown level.</summary>
+        public void Validate()
+        {
+            AppEventStore.LevelsFrom(MinLevel);
+        }
     }
 
     public sealed class SourceLogResult
